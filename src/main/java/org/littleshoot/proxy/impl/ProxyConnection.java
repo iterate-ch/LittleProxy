@@ -131,7 +131,15 @@ abstract class ProxyConnection<I extends HttpObject> extends
         ConnectionState nextState = getCurrentState();
         switch (getCurrentState()) {
         case AWAITING_INITIAL:
-            nextState = readHTTPInitial((I) httpObject);
+            if (httpObject instanceof HttpMessage) {
+                nextState = readHTTPInitial((I) httpObject);
+            } else {
+                // Similar to the AWAITING_PROXY_AUTHENTICATION case below, we may enter an AWAITING_INITIAL
+                // state if the proxy responded to an earlier request with a 502 or 504 response, or a short-circuit
+                // response from a filter. The client may have sent some chunked HttpContent associated with the request
+                // after the short-circuit response was sent. We can safely drop them.
+                LOG.debug("Dropping message because HTTP object was not an HttpMessage. HTTP object may be orphaned content from a short-circuited response. Message: {}", httpObject);
+            }
             break;
         case AWAITING_CHUNK:
             HttpContent chunk = (HttpContent) httpObject;
@@ -369,7 +377,15 @@ abstract class ProxyConnection<I extends HttpObject> extends
             channel.config().setAutoRead(true);
         }
         SslHandler handler = new SslHandler(sslEngine);
-        pipeline.addFirst("ssl", handler);
+        if(pipeline.get("ssl") == null) {
+            pipeline.addFirst("ssl", handler);
+        } else {
+            // The second SSL handler is added to handle the case
+            // where the proxy (running as MITM) has to chain with
+            // another SSL enabled proxy. The second SSL handler
+            // is to perform SSL with the server.
+            pipeline.addAfter("ssl", "sslWithServer", handler);
+        }
         return handler.handshakeFuture();
     }
 
@@ -760,34 +776,40 @@ abstract class ProxyConnection<I extends HttpObject> extends
         public void write(ChannelHandlerContext ctx,
                 Object msg, ChannelPromise promise)
                 throws Exception {
-
             HttpRequest originalRequest = null;
             if (msg instanceof HttpRequest) {
                 originalRequest = (HttpRequest) msg;
             }
 
-            try {
-                if (null != originalRequest) {
-                    requestWritten(originalRequest);
-                }
-            } catch (Throwable t) {
-                LOG.warn("Unable to record bytesRead", t);
-            } finally {
-                if (null != originalRequest) {
-                    getHttpFiltersFromProxyServer(originalRequest)
-                            .proxyToServerRequestSending();
-                }
+            if (null != originalRequest) {
+                requestWriting(originalRequest);
+            }
 
-                super.write(ctx, msg, promise);
+            super.write(ctx, msg, promise);
 
-                if (null != originalRequest) {
-                    getHttpFiltersFromProxyServer(originalRequest)
-                            .proxyToServerRequestSent();
-                }
+            if (null != originalRequest) {
+                requestWritten(originalRequest);
+            }
+
+            if (msg instanceof HttpContent) {
+                contentWritten((HttpContent) msg);
             }
         }
 
+        /**
+         * Invoked immediately before an HttpRequest is written.
+         */
+        protected abstract void requestWriting(HttpRequest httpRequest);
+
+        /**
+         * Invoked immediately after an HttpRequest has been sent.
+         */
         protected abstract void requestWritten(HttpRequest httpRequest);
+
+        /**
+         * Invoked immediately after an HttpContent has been sent.
+         */
+        protected abstract void contentWritten(HttpContent httpContent);
     }
 
     /**
@@ -805,7 +827,7 @@ abstract class ProxyConnection<I extends HttpObject> extends
                     responseWritten(((HttpResponse) msg));
                 }
             } catch (Throwable t) {
-                LOG.warn("Unable to record bytesRead", t);
+                LOG.warn("Error while invoking responseWritten callback", t);
             } finally {
                 super.write(ctx, msg, promise);
             }

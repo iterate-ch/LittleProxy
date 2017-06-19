@@ -1,17 +1,6 @@
 package org.littleshoot.proxy;
 
-import static org.junit.Assert.*;
 import io.netty.handler.codec.http.HttpRequest;
-
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.security.cert.X509Certificate;
-import java.util.concurrent.atomic.AtomicInteger;
-
-import javax.net.ssl.SSLException;
-import javax.net.ssl.SSLSession;
-import javax.net.ssl.SSLSocket;
-
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpHost;
 import org.apache.http.HttpResponse;
@@ -34,6 +23,18 @@ import org.junit.After;
 import org.junit.Before;
 import org.littleshoot.proxy.impl.DefaultHttpProxyServer;
 
+import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLSession;
+import javax.net.ssl.SSLSocket;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.security.cert.X509Certificate;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.hamcrest.Matchers.greaterThan;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThat;
+
 /**
  * Base for tests that test the proxy. This base class encapsulates all of the
  * testing infrastructure.
@@ -41,21 +42,11 @@ import org.littleshoot.proxy.impl.DefaultHttpProxyServer;
 public abstract class AbstractProxyTest {
     protected static final String DEFAULT_RESOURCE = "/";
 
-    protected static final AtomicInteger WEB_SERVER_PORT_SEQ = new AtomicInteger(
-            50000);
-    protected static final AtomicInteger WEB_SERVER_HTTPS_PORT_SEQ = new AtomicInteger(
-            53000);
-    protected static final AtomicInteger PROXY_SERVER_PORT_SEQ = new AtomicInteger(
-            56000);
+    protected int webServerPort = -1;
+    protected int httpsWebServerPort = -1;
 
-    protected int webServerPort = 0;
-    protected int httpsWebServerPort = 0;
-    protected int proxyServerPort = 0;
-
-    protected HttpHost webHost = new HttpHost("127.0.0.1",
-            webServerPort);
-    protected HttpHost httpsWebHost = new HttpHost(
-            "127.0.0.1", httpsWebServerPort, "https");
+    protected HttpHost webHost;
+    protected HttpHost httpsWebHost;
 
     /**
      * The server used by the tests.
@@ -101,18 +92,22 @@ public abstract class AbstractProxyTest {
 
     @Before
     public void runSetUp() throws Exception {
-        // Set up new ports for everything based on sequence numbers
-        webServerPort = WEB_SERVER_PORT_SEQ.getAndIncrement();
-        httpsWebServerPort = WEB_SERVER_HTTPS_PORT_SEQ.getAndIncrement();
-        proxyServerPort = PROXY_SERVER_PORT_SEQ.getAndIncrement();
+        webServer = TestUtils.startWebServer(true);
 
-        webHost = new HttpHost("127.0.0.1",
-                webServerPort);
-        httpsWebHost = new HttpHost(
-                "127.0.0.1", httpsWebServerPort, "https");
+        // find out what ports the HTTP and HTTPS connectors were bound to
+        httpsWebServerPort = TestUtils.findLocalHttpsPort(webServer);
+        if (httpsWebServerPort < 0) {
+            throw new RuntimeException("HTTPS connector should already be open and listening, but port was " + webServerPort);
+        }
 
-        webServer = TestUtils.startWebServer(webServerPort,
-                httpsWebServerPort);
+        webServerPort = TestUtils.findLocalHttpPort(webServer);
+        if (webServerPort < 0) {
+            throw new RuntimeException("HTTP connector should already be open and listening, but port was " + webServerPort);
+        }
+
+        webHost = new HttpHost("127.0.0.1", webServerPort);
+        httpsWebHost = new HttpHost("127.0.0.1", httpsWebServerPort, "https");
+
         setUp();
     }
 
@@ -125,7 +120,7 @@ public abstract class AbstractProxyTest {
         } finally {
             try {
                 if (this.proxyServer != null) {
-                    this.proxyServer.stop();
+                    this.proxyServer.abort();
                 }
             } finally {
                 if (this.webServer != null) {
@@ -159,7 +154,7 @@ public abstract class AbstractProxyTest {
     }
 
     protected void assertReceivedBadGateway(ResponseInfo response) {
-        assertTrue("Received: " + response, response.getStatusCode() == 502);
+        assertEquals("Received: " + response, 502, response.getStatusCode());
     }
 
     protected ResponseInfo httpPostWithApacheClient(
@@ -167,18 +162,18 @@ public abstract class AbstractProxyTest {
             throws Exception {
         String username = getUsername();
         String password = getPassword();
-        final DefaultHttpClient httpClient = buildHttpClient();
+        final DefaultHttpClient httpClient = TestUtils.buildHttpClient();
         try {
             if (isProxied) {
                 final HttpHost proxy = new HttpHost("127.0.0.1",
-                        proxyServerPort);
+                        proxyServer.getListenAddress().getPort());
                 httpClient.getParams().setParameter(
                         ConnRoutePNames.DEFAULT_PROXY, proxy);
                 if (username != null && password != null) {
                     httpClient.getCredentialsProvider()
                             .setCredentials(
                                     new AuthScope("127.0.0.1",
-                                            proxyServerPort),
+                                            proxyServer.getListenAddress().getPort()),
                                     new UsernamePasswordCredentials(username,
                                             password));
                 }
@@ -207,17 +202,17 @@ public abstract class AbstractProxyTest {
             throws Exception {
         String username = getUsername();
         String password = getPassword();
-        DefaultHttpClient httpClient = buildHttpClient();
+        DefaultHttpClient httpClient = TestUtils.buildHttpClient();
         try {
             if (isProxied) {
-                HttpHost proxy = new HttpHost("127.0.0.1", proxyServerPort);
+                HttpHost proxy = new HttpHost("127.0.0.1", proxyServer.getListenAddress().getPort());
                 httpClient.getParams().setParameter(
                         ConnRoutePNames.DEFAULT_PROXY, proxy);
                 if (username != null && password != null) {
                     httpClient.getCredentialsProvider()
                             .setCredentials(
                                     new AuthScope("127.0.0.1",
-                                            proxyServerPort),
+                                            proxyServer.getListenAddress().getPort()),
                                     new UsernamePasswordCredentials(username,
                                             password));
                 }
@@ -254,32 +249,6 @@ public abstract class AbstractProxyTest {
         } finally {
             httpClient.getConnectionManager().shutdown();
         }
-    }
-
-    private DefaultHttpClient buildHttpClient() throws Exception {
-        DefaultHttpClient httpClient = new DefaultHttpClient();
-        SSLSocketFactory sf = new SSLSocketFactory(
-                new TrustSelfSignedStrategy(), new X509HostnameVerifier() {
-                    public boolean verify(String arg0, SSLSession arg1) {
-                        return true;
-                    }
-
-                    public void verify(String host, String[] cns,
-                            String[] subjectAlts)
-                            throws SSLException {
-                    }
-
-                    public void verify(String host, X509Certificate cert)
-                            throws SSLException {
-                    }
-
-                    public void verify(String host, SSLSocket ssl)
-                            throws IOException {
-                    }
-                });
-        Scheme scheme = new Scheme("https", 443, sf);
-        httpClient.getConnectionManager().getSchemeRegistry().register(scheme);
-        return httpClient;
     }
 
     protected String compareProxiedAndUnproxiedPOST(HttpHost host,
@@ -326,16 +295,16 @@ public abstract class AbstractProxyTest {
         if (isHTTPS && !isChained()) {
             numberOfExpectedServerInteractions -= 1;
         }
-        assertTrue(bytesReceivedFromClient.get() > 0);
+        assertThat(bytesReceivedFromClient.get(), greaterThan(0));
         assertEquals(numberOfExpectedClientInteractions,
                 requestsReceivedFromClient.get());
-        assertTrue(bytesSentToServer.get() > 0);
+        assertThat(bytesSentToServer.get(), greaterThan(0));
         assertEquals(numberOfExpectedServerInteractions,
                 requestsSentToServer.get());
-        assertTrue(bytesReceivedFromServer.get() > 0);
+        assertThat(bytesReceivedFromServer.get(), greaterThan(0));
         assertEquals(numberOfExpectedServerInteractions,
                 responsesReceivedFromServer.get());
-        assertTrue(bytesSentToClient.get() > 0);
+        assertThat(bytesSentToClient.get(), greaterThan(0));
         assertEquals(numberOfExpectedClientInteractions,
                 responsesSentToClient.get());
     }

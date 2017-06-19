@@ -8,7 +8,7 @@ public class UsernamePasswordAuthenticatingProxyTest extends BaseProxyTest
     @Override
     protected void setUp() {
         this.proxyServer = bootstrapProxy()
-                .withPort(proxyServerPort)
+                .withPort(0)
                 .withProxyAuthenticator(this)
                 .start();
     }
@@ -31,5 +31,10 @@ public class UsernamePasswordAuthenticatingProxyTest extends BaseProxyTest
     @Override
     protected boolean isAuthenticating() {
         return true;
+    }
+
+    @Override
+    public String getRealm() {
+        return null;
     }
 }

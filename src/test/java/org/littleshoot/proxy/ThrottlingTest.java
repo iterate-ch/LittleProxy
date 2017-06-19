@@ -11,7 +11,6 @@ import org.apache.http.params.CoreConnectionPNames;
 import org.apache.http.util.EntityUtils;
 import org.eclipse.jetty.server.Server;
 import org.junit.After;
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.FixMethodOrder;
 import org.junit.Test;
@@ -20,11 +19,14 @@ import org.littleshoot.proxy.impl.DefaultHttpProxyServer;
 
 import java.io.IOException;
 
+import static org.hamcrest.Matchers.both;
+import static org.hamcrest.Matchers.greaterThan;
+import static org.hamcrest.Matchers.lessThan;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThat;
+
 @FixMethodOrder(MethodSorters.JVM)
 public class ThrottlingTest {
-
-    private static final int WRITE_WEB_SERVER_PORT = 8926;
-    private static final int READ_WEB_SERVER_PORT = 8927;
     private static final long THROTTLED_READ_BYTES_PER_SECOND = 25000L;
     private static final long THROTTLED_WRITE_BYTES_PER_SECOND = 25000L;
 
@@ -44,6 +46,9 @@ public class ThrottlingTest {
     // time to allow for an unthrottled local request
     private static final int UNTRHOTTLED_REQUEST_TIME_MS = 1000;
 
+    private int writeWebServerPort;
+    private int readWebServerPort;
+
     @Before
     public void setUp() throws Exception {
         // Set up some large data
@@ -55,14 +60,24 @@ public class ThrottlingTest {
         msToWriteThrottled = largeData.length  * 1000 / (int)THROTTLED_WRITE_BYTES_PER_SECOND;
         msToReadThrottled = largeData.length  * 1000 / (int)THROTTLED_READ_BYTES_PER_SECOND;
 
-        writeWebServer = TestUtils.startWebServer(WRITE_WEB_SERVER_PORT);
-        readWebServer = TestUtils.startWebServerWithResponse(READ_WEB_SERVER_PORT, largeData);
+        writeWebServer = TestUtils.startWebServer(false);
+        writeWebServerPort = TestUtils.findLocalHttpPort(writeWebServer);
+
+        readWebServer = TestUtils.startWebServerWithResponse(false, largeData);
+        readWebServerPort = TestUtils.findLocalHttpPort(readWebServer);
     }
 
     @After
     public void tearDown() throws Exception {
-        writeWebServer.stop();
-        readWebServer.stop();
+        try {
+            if (writeWebServer != null) {
+                writeWebServer.stop();
+            }
+        } finally {
+            if (readWebServer != null) {
+                readWebServer.stop();
+            }
+        }
     }
 
     @Test
@@ -80,9 +95,9 @@ public class ThrottlingTest {
         HttpGet request = createHttpGet();
         DefaultHttpClient httpClient = createHttpClient(proxyPort);
 
-        EntityUtils.consumeQuietly(httpClient.execute(new HttpHost("127.0.0.1", WRITE_WEB_SERVER_PORT), request).getEntity());
+        EntityUtils.consumeQuietly(httpClient.execute(new HttpHost("127.0.0.1", writeWebServerPort), request).getEntity());
 
-        EntityUtils.consumeQuietly(httpClient.execute(new HttpHost("127.0.0.1", READ_WEB_SERVER_PORT), request).getEntity());
+        EntityUtils.consumeQuietly(httpClient.execute(new HttpHost("127.0.0.1", readWebServerPort), request).getEntity());
     }
 
     @Test
@@ -101,17 +116,17 @@ public class ThrottlingTest {
         long start = System.currentTimeMillis();
         final org.apache.http.HttpResponse response = httpClient.execute(
                 new HttpHost("127.0.0.1",
-                        WRITE_WEB_SERVER_PORT), request);
+                        writeWebServerPort), request);
         long finish = System.currentTimeMillis();
 
-        Assert.assertEquals("Received " + largeData.length + " bytes\n",
+        assertEquals("Received " + largeData.length + " bytes\n",
                 EntityUtils.toString(response.getEntity()));
 
-        Assert.assertTrue("Expected throttled write to complete in approximately " + msToWriteThrottled + "ms" + " but took " + (finish - start) + "ms",
-                finish - start > msToWriteThrottled * (1 - ALLOWABLE_VARIATION)
-                        && (finish - start < msToWriteThrottled * (1 + ALLOWABLE_VARIATION)));
+        assertThat("Expected throttled write to complete in approximately " + msToWriteThrottled + "ms" + " but took " + (finish - start) + "ms",
+                (double)(finish - start), both(greaterThan(msToWriteThrottled * (1 - ALLOWABLE_VARIATION))).and(
+                        lessThan(msToWriteThrottled * (1 + ALLOWABLE_VARIATION))));
 
-        proxyServer.stop();
+        proxyServer.abort();
     }
 
     @Test
@@ -129,15 +144,16 @@ public class ThrottlingTest {
         long start = System.currentTimeMillis();
         final org.apache.http.HttpResponse response = httpClient.execute(
                 new HttpHost("127.0.0.1",
-                        WRITE_WEB_SERVER_PORT), request);
+                        writeWebServerPort), request);
         long finish = System.currentTimeMillis();
 
-        Assert.assertEquals("Received " + largeData.length + " bytes\n",
+        assertEquals("Received " + largeData.length + " bytes\n",
                 EntityUtils.toString(response.getEntity()));
 
-        Assert.assertTrue("Unthrottled write took " + (finish - start) + "ms, but expected to complete in " + UNTRHOTTLED_REQUEST_TIME_MS + "ms", finish - start < UNTRHOTTLED_REQUEST_TIME_MS);
+        assertThat("Unthrottled write took " + (finish - start) + "ms, but expected to complete in " + UNTRHOTTLED_REQUEST_TIME_MS + "ms",
+                finish - start, lessThan((long) UNTRHOTTLED_REQUEST_TIME_MS));
 
-        proxyServer.stop();
+        proxyServer.abort();
     }
 
     @Test
@@ -156,7 +172,7 @@ public class ThrottlingTest {
         long start = System.currentTimeMillis();
         final org.apache.http.HttpResponse response = httpClient.execute(
                 new HttpHost("127.0.0.1",
-                        READ_WEB_SERVER_PORT), request);
+                        readWebServerPort), request);
         byte[] readContent = new byte[100000];
 
         int bytesRead = 0;
@@ -167,11 +183,11 @@ public class ThrottlingTest {
 
         long finish = System.currentTimeMillis();
 
-        Assert.assertTrue("Expected throttled read to complete in approximately " + msToReadThrottled + "ms" + " but took " + (finish - start) + "ms",
-                finish - start > msToReadThrottled * (1 - ALLOWABLE_VARIATION)
-                        && (finish - start < msToReadThrottled * (1 + ALLOWABLE_VARIATION)));
+        assertThat("Expected throttled read to complete in approximately " + msToReadThrottled + "ms" + " but took " + (finish - start) + "ms",
+                (double)(finish - start), both(greaterThan(msToReadThrottled * (1 - ALLOWABLE_VARIATION)))
+                        .and(lessThan(msToReadThrottled * (1 + ALLOWABLE_VARIATION))));
 
-        proxyServer.stop();
+        proxyServer.abort();
     }
 
     @Test
@@ -189,7 +205,7 @@ public class ThrottlingTest {
         long start = System.currentTimeMillis();
         final org.apache.http.HttpResponse response = httpClient.execute(
                 new HttpHost("127.0.0.1",
-                        READ_WEB_SERVER_PORT), request);
+                        readWebServerPort), request);
 
         byte[] readContent = new byte[100000];
         int bytesRead = 0;
@@ -200,9 +216,10 @@ public class ThrottlingTest {
 
         long finish = System.currentTimeMillis();
 
-        Assert.assertTrue("Unthrottled read took " + (finish - start) + "ms, but expected to complete in " + UNTRHOTTLED_REQUEST_TIME_MS + "ms", finish - start < UNTRHOTTLED_REQUEST_TIME_MS);
+        assertThat("Unthrottled read took " + (finish - start) + "ms, but expected to complete in " + UNTRHOTTLED_REQUEST_TIME_MS + "ms",
+                finish - start, lessThan((long)UNTRHOTTLED_REQUEST_TIME_MS));
 
-        proxyServer.stop();
+        proxyServer.abort();
     }
 
     @Test
@@ -221,7 +238,7 @@ public class ThrottlingTest {
         long firstStart = System.currentTimeMillis();
         org.apache.http.HttpResponse response = httpClient.execute(
                 new HttpHost("127.0.0.1",
-                        READ_WEB_SERVER_PORT), request);
+                        readWebServerPort), request);
         byte[] readContent = new byte[100000];
 
         int bytesRead = 0;
@@ -239,7 +256,7 @@ public class ThrottlingTest {
         long secondStart = System.currentTimeMillis();
         response = httpClient.execute(
                 new HttpHost("127.0.0.1",
-                        READ_WEB_SERVER_PORT), request);
+                        readWebServerPort), request);
         readContent = new byte[100000];
 
         bytesRead = 0;
@@ -252,11 +269,11 @@ public class ThrottlingTest {
 
         HttpClientUtils.closeQuietly(response);
 
-        Assert.assertTrue("Expected second read to take approximately half as long as first throttled read. First read took " + (firstFinish - firstStart) + "ms" + " but second read took " + (secondFinish - secondStart) + "ms",
-                (firstFinish - firstStart) / 2 > (secondFinish - secondStart) * (1 - ALLOWABLE_VARIATION)
-                        && ((firstFinish - firstStart) / 2 < (secondFinish - secondStart) * (1 + ALLOWABLE_VARIATION)));
+        assertThat("Expected second read to take approximately half as long as first throttled read. First read took " + (firstFinish - firstStart) + "ms" + " but second read took " + (secondFinish - secondStart) + "ms",
+                (double)(firstFinish - firstStart) / 2, both(greaterThan((secondFinish - secondStart) * (1 - ALLOWABLE_VARIATION)))
+                        .and(lessThan((secondFinish - secondStart) * (1 + ALLOWABLE_VARIATION))));
 
-        proxyServer.stop();
+        proxyServer.abort();
     }
 
     @Test
@@ -275,7 +292,7 @@ public class ThrottlingTest {
         long firstStart = System.currentTimeMillis();
         org.apache.http.HttpResponse response = httpClient.execute(
                 new HttpHost("127.0.0.1",
-                        READ_WEB_SERVER_PORT), request);
+                        readWebServerPort), request);
         byte[] readContent = new byte[100000];
 
         int bytesRead = 0;
@@ -293,7 +310,7 @@ public class ThrottlingTest {
         long secondStart = System.currentTimeMillis();
         response = httpClient.execute(
                 new HttpHost("127.0.0.1",
-                        READ_WEB_SERVER_PORT), request);
+                        readWebServerPort), request);
         readContent = new byte[100000];
 
         bytesRead = 0;
@@ -306,11 +323,11 @@ public class ThrottlingTest {
 
         HttpClientUtils.closeQuietly(response);
 
-        Assert.assertTrue("Expected second read to complete within " + UNTRHOTTLED_REQUEST_TIME_MS + "ms, without throttling. First read took "
+        assertThat("Expected second read to complete within " + UNTRHOTTLED_REQUEST_TIME_MS + "ms, without throttling. First read took "
                         + (firstFinish - firstStart) + "ms" + ". Second read took " + (secondFinish - secondStart) + "ms",
-                secondFinish - secondStart < UNTRHOTTLED_REQUEST_TIME_MS);
+                secondFinish - secondStart, lessThan((long) UNTRHOTTLED_REQUEST_TIME_MS));
 
-        proxyServer.stop();
+        proxyServer.abort();
 
     }
 

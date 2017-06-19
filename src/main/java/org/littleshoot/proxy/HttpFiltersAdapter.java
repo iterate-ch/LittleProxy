@@ -11,6 +11,11 @@ import java.net.InetSocketAddress;
  * Convenience base class for implementations of {@link HttpFilters}.
  */
 public class HttpFiltersAdapter implements HttpFilters {
+    /**
+     * A default, stateless, no-op {@link HttpFilters} instance.
+     */
+    public static final HttpFiltersAdapter NOOP_FILTER = new HttpFiltersAdapter(null);
+
     protected final HttpRequest originalRequest;
     protected final ChannelHandlerContext ctx;
 
@@ -48,6 +53,10 @@ public class HttpFiltersAdapter implements HttpFilters {
     }
 
     @Override
+    public void serverToProxyResponseTimedOut() {
+    }
+
+    @Override
     public void serverToProxyResponseReceiving() {
     }
 
@@ -71,6 +80,10 @@ public class HttpFiltersAdapter implements HttpFilters {
     }
 
     @Override
+    public void proxyToServerResolutionFailed(String hostAndPort) {
+    }
+
+    @Override
     public void proxyToServerResolutionSucceeded(String serverHostAndPort,
             InetSocketAddress resolvedRemoteAddress) {
     }
@@ -88,6 +101,6 @@ public class HttpFiltersAdapter implements HttpFilters {
     }
 
     @Override
-    public void proxyToServerConnectionSucceeded() {
+    public void proxyToServerConnectionSucceeded(ChannelHandlerContext serverCtx) {
     }
 }

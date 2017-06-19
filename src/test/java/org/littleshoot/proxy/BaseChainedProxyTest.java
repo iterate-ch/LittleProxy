@@ -1,17 +1,18 @@
 package org.littleshoot.proxy;
 
 import io.netty.handler.codec.http.HttpRequest;
+import org.littleshoot.proxy.impl.DefaultHttpProxyServer;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentSkipListSet;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
-import org.junit.Assert;
-import org.littleshoot.proxy.impl.DefaultHttpProxyServer;
+import static org.hamcrest.Matchers.isIn;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThat;
 
 /**
  * Base class for tests that test a proxy chained to an upstream proxy. In
@@ -19,18 +20,13 @@ import org.littleshoot.proxy.impl.DefaultHttpProxyServer;
  * by the downstream proxy was received by the upstream proxy.
  */
 public abstract class BaseChainedProxyTest extends BaseProxyTest {
-    protected static final AtomicInteger UPSTREAM_PROXY_SERVER_PORT_SEQ = new AtomicInteger(
-            59000);
-
-    private int upstreamProxyPort;
-
-    private final AtomicLong REQUESTS_SENT_BY_DOWNSTREAM = new AtomicLong(
+    protected final AtomicLong REQUESTS_SENT_BY_DOWNSTREAM = new AtomicLong(
             0l);
-    private final AtomicLong REQUESTS_RECEIVED_BY_UPSTREAM = new AtomicLong(
+    protected final AtomicLong REQUESTS_RECEIVED_BY_UPSTREAM = new AtomicLong(
             0l);
-    private final ConcurrentSkipListSet<TransportProtocol> TRANSPORTS_USED = new ConcurrentSkipListSet<TransportProtocol>();
+    protected final ConcurrentSkipListSet<TransportProtocol> TRANSPORTS_USED = new ConcurrentSkipListSet<TransportProtocol>();
 
-    private final ActivityTracker DOWNSTREAM_TRACKER = new ActivityTrackerAdapter() {
+    protected final ActivityTracker DOWNSTREAM_TRACKER = new ActivityTrackerAdapter() {
         @Override
         public void requestSentToServer(FullFlowContext flowContext,
                 io.netty.handler.codec.http.HttpRequest httpRequest) {
@@ -40,29 +36,25 @@ public abstract class BaseChainedProxyTest extends BaseProxyTest {
         }
     };
 
-    private final ActivityTracker UPSTREAM_TRACKER = new ActivityTrackerAdapter() {
+    protected final ActivityTracker UPSTREAM_TRACKER = new ActivityTrackerAdapter() {
         @Override
         public void requestReceivedFromClient(FlowContext flowContext,
                 HttpRequest httpRequest) {
             REQUESTS_RECEIVED_BY_UPSTREAM.incrementAndGet();
-        };
+        }
     };
 
-    private HttpProxyServer upstreamProxy;
+    protected HttpProxyServer upstreamProxy;
 
     @Override
     protected void setUp() {
-        // Set up ports from sequence
-        upstreamProxyPort = UPSTREAM_PROXY_SERVER_PORT_SEQ
-                .getAndIncrement();
-
         REQUESTS_SENT_BY_DOWNSTREAM.set(0);
         REQUESTS_RECEIVED_BY_UPSTREAM.set(0);
         TRANSPORTS_USED.clear();
         this.upstreamProxy = upstreamProxy().start();
         this.proxyServer = bootstrapProxy()
                 .withName("Downstream")
-                .withPort(proxyServerPort)
+                .withPort(0)
                 .withChainProxyManager(chainedProxyManager())
                 .plusActivityTracker(DOWNSTREAM_TRACKER).start();
     }
@@ -70,7 +62,7 @@ public abstract class BaseChainedProxyTest extends BaseProxyTest {
     protected HttpProxyServerBootstrap upstreamProxy() {
         return DefaultHttpProxyServer.bootstrap()
                 .withName("Upstream")
-                .withPort(upstreamProxyPort)
+                .withPort(0)
                 .plusActivityTracker(UPSTREAM_TRACKER);
     }
     
@@ -90,7 +82,7 @@ public abstract class BaseChainedProxyTest extends BaseProxyTest {
 
     @Override
     protected void tearDown() throws Exception {
-        this.upstreamProxy.stop();
+        this.upstreamProxy.abort();
     }
 
     @Override
@@ -123,16 +115,15 @@ public abstract class BaseChainedProxyTest extends BaseProxyTest {
     }
 
     private void assertThatUpstreamProxyReceivedSentRequests() {
-        Assert.assertEquals(
+        assertEquals(
                 "Upstream proxy should have seen every request sent by downstream proxy",
                 REQUESTS_SENT_BY_DOWNSTREAM.get(),
                 REQUESTS_RECEIVED_BY_UPSTREAM.get());
-        Assert.assertEquals(
+        assertEquals(
                 "1 and only 1 transport protocol should have been used to upstream proxy",
                 1, TRANSPORTS_USED.size());
-        Assert.assertTrue("Correct transport should have been used",
-                TRANSPORTS_USED.contains(newChainedProxy()
-                        .getTransportProtocol()));
+        assertThat("Correct transport should have been used",
+                newChainedProxy().getTransportProtocol(), isIn(TRANSPORTS_USED));
     }
 
     protected class BaseChainedProxy extends ChainedProxyAdapter {
@@ -141,7 +132,7 @@ public abstract class BaseChainedProxyTest extends BaseProxyTest {
             try {
                 return new InetSocketAddress(InetAddress
                         .getByName("127.0.0.1"),
-                        upstreamProxyPort);
+                        upstreamProxy.getListenAddress().getPort());
             } catch (UnknownHostException uhe) {
                 throw new RuntimeException(
                         "Unable to resolve 127.0.0.1?!");

@@ -1,5 +1,6 @@
 package org.littleshoot.proxy;
 
+import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.*;
 import org.littleshoot.proxy.impl.ProxyUtils;
 
@@ -66,28 +67,39 @@ import java.net.InetSocketAddress;
  * <li>serverToProxyResponseReceived</li>
  * <li>proxyToClientResponse</li>
  * </ol>
- * </p>
  */
 public interface HttpFilters {
     /**
-     * Filters requests on their way from the client to the proxy.
+     * Filters requests on their way from the client to the proxy. To interrupt processing of this request and return a
+     * response to the client immediately, return an HttpResponse here. Otherwise, return null to continue processing as
+     * usual.
+     * <p>
+     * <b>Important:</b> When returning a response, you must include a mechanism to allow the client to determine the length
+     * of the message (see RFC 7230, section 3.3.3: https://tools.ietf.org/html/rfc7230#section-3.3.3 ). For messages that
+     * may contain a body, you may do this by setting the Transfer-Encoding to chunked, setting an appropriate
+     * Content-Length, or by adding a "Connection: close" header to the response (which will instruct LittleProxy to close
+     * the connection). If the short-circuit response contains body content, it is recommended that you return a
+     * FullHttpResponse.
      * 
-     * @param httpObject
-     *            Client to Proxy HttpRequest (and HttpContent, if chunked)
-     * @return if you want to interrupted processing and return a response to
-     *         the client, return it here, otherwise return null to continue
-     *         processing as usual
+     * @param httpObject Client to Proxy HttpRequest (and HttpContent, if chunked)
+     * @return a short-circuit response, or null to continue processing as usual
      */
     HttpResponse clientToProxyRequest(HttpObject httpObject);
 
     /**
-     * Filters requests on their way from the proxy to the server.
+     * Filters requests on their way from the proxy to the server. To interrupt processing of this request and return a
+     * response to the client immediately, return an HttpResponse here. Otherwise, return null to continue processing as
+     * usual.
+     * <p>
+     * <b>Important:</b> When returning a response, you must include a mechanism to allow the client to determine the length
+     * of the message (see RFC 7230, section 3.3.3: https://tools.ietf.org/html/rfc7230#section-3.3.3 ). For messages that
+     * may contain a body, you may do this by setting the Transfer-Encoding to chunked, setting an appropriate
+     * Content-Length, or by adding a "Connection: close" header to the response. (which will instruct LittleProxy to close
+     * the connection). If the short-circuit response contains body content, it is recommended that you return a
+     * FullHttpResponse.
      * 
-     * @param httpObject
-     *            Proxy to Server HttpRequest (and HttpContent, if chunked)
-     * @return if you want to interrupted processing and return a response to
-     *         the client, return it here, otherwise return null to continue
-     *         processing as usual
+     * @param httpObject Proxy to Server HttpRequest (and HttpContent, if chunked)
+     * @return a short-circuit response, or null to continue processing as usual
      */
     HttpResponse proxyToServerRequest(HttpObject httpObject);
 
@@ -97,7 +109,7 @@ public interface HttpFilters {
     void proxyToServerRequestSending();
 
     /**
-     * Informs filter that proxy to server request has been sent.
+     * Informs filter that the HTTP request, including any content, has been sent.
      */
     void proxyToServerRequestSent();
 
@@ -110,6 +122,15 @@ public interface HttpFilters {
      *         force a disconnect.
      */
     HttpObject serverToProxyResponse(HttpObject httpObject);
+
+    /**
+     * Informs filter that a timeout occurred before the server response was received by the client. The timeout may have
+     * occurred while the client was sending the request, waiting for a response, or after the client started receiving
+     * a response (i.e. if the response from the server "stalls").
+     *
+     * See {@link HttpProxyServerBootstrap#withIdleConnectionTimeout(int)} for information on setting the timeout.
+     */
+    void serverToProxyResponseTimedOut();
 
     /**
      * Informs filter that server to proxy response is being received.
@@ -148,6 +169,13 @@ public interface HttpFilters {
             String resolvingServerHostAndPort);
 
     /**
+     * Informs filter that proxy to server DNS resolution failed for the specified host and port.
+     *
+     * @param hostAndPort hostname and port the proxy failed to resolve
+     */
+    void proxyToServerResolutionFailed(String hostAndPort);
+
+    /**
      * Informs filter that proxy to server DNS resolution has happened.
      * 
      * @param serverHostAndPort
@@ -175,7 +203,9 @@ public interface HttpFilters {
 
     /**
      * Informs filter that proxy to server connection has succeeded.
+     *
+     * @param serverCtx the {@link io.netty.channel.ChannelHandlerContext} used to connect to the server
      */
-    void proxyToServerConnectionSucceeded();
+    void proxyToServerConnectionSucceeded(ChannelHandlerContext serverCtx);
 
 }
