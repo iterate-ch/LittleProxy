@@ -2,6 +2,8 @@ package org.littleshoot.proxy.impl;
 
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.udt.nio.NioUdtProvider;
+import io.netty.util.internal.SystemPropertyUtil;
+
 import org.littleshoot.proxy.HttpProxyServer;
 import org.littleshoot.proxy.TransportProtocol;
 import org.littleshoot.proxy.UnknownTransportProtocolException;
@@ -28,12 +30,15 @@ public class ServerGroup {
      * The default number of threads to accept incoming requests from clients. (Requests are serviced by worker threads,
      * not acceptor threads.)
      */
-    public static final int DEFAULT_INCOMING_ACCEPTOR_THREADS = 2;
+    public static final int DEFAULT_INCOMING_ACCEPTOR_THREADS = Math.max(1, SystemPropertyUtil.getInt(
+            "proxy.acceptor.threads.", 2));
 
     /**
      * The default number of threads to service incoming requests from clients.
      */
-    public static final int DEFAULT_INCOMING_WORKER_THREADS = 8;
+    public static final int DEFAULT_INCOMING_WORKER_THREADS = Math.max(1, SystemPropertyUtil.getInt(
+            "proxy.worker.threads.incoming", Math.max(1, SystemPropertyUtil.getInt(
+                    "proxy.worker.threads.outgoing", Runtime.getRuntime().availableProcessors() * 2));
 
     /**
      * The default number of threads to service outgoing requests to servers.
