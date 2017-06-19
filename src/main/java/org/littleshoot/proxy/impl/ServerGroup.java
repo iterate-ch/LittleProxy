@@ -38,7 +38,7 @@ public class ServerGroup {
      */
     public static final int DEFAULT_INCOMING_WORKER_THREADS = Math.max(1, SystemPropertyUtil.getInt(
             "proxy.worker.threads.incoming", Math.max(1, SystemPropertyUtil.getInt(
-                    "proxy.worker.threads.outgoing", Runtime.getRuntime().availableProcessors() * 2));
+                    "proxy.worker.threads.outgoing", Runtime.getRuntime().availableProcessors() * 2))));
 
     /**
      * The default number of threads to service outgoing requests to servers.
